@@ -8,6 +8,7 @@ import time
 import shutil
 import hashlib
 import pickle
+from needfiles import NeedFiles
 
 try:
     import exifread
@@ -63,48 +64,11 @@ def renameFile(file, index):
     return os.path.join(path, newfilename)
 
 
-def getSubPaths(path):
-    '''返回path目录下的所有子目录'''
-    yield path
-    stack = []
-    stack.append(path)
-    while len(stack) != 0:
-        dirpath = stack.pop()
-        try:
-            filelist = os.listdir(dirpath)
-        except PermissionError as err:
-            print(err)
-            continue
-        else:
-            for filename in filelist:
-                fileabs = os.path.join(dirpath, filename)
-                if os.path.isdir(fileabs):
-                    stack.append(fileabs)
-                    yield fileabs
-
-
-def createWildcard(extlist):
-    '''根据扩展名列表生成glob所需的通配符，如‘*.[JjMm][PpOo][GgV4v]’'''
-    allext = [s.lower() for s in extlist] + [s.upper() for s in extlist]
-    # print(allext)
-    wlist = [''.join(set(x)) for x in zip(*allext)]
-    # print(wlist)
-    return ("*." + "[{}]" * len(wlist)).format(*wlist)
-
-
-def getFileOfNeedType(wildcard, path):
-    '''获取所需类型的文件'''
-    for parameter in [os.path.join(subPath, wildcard) for subPath in
-                      getSubPaths(path)]:  # 生成 glob.glob() 函数的参数，如 "d:\\backup\\*.jpg"
-        for srcFile in glob.glob(parameter):
-            yield srcFile
-
-
 class FileInfo(object):
     def __init__(self, file):
         self.file = os.path.abspath(file)
         self.fileName = os.path.basename(self.file)
-        self.fileExt = os.path.splitext(self.fileName)[-1]
+        self.fileExtension = os.path.splitext(self.fileName)[-1]
         self.fileMd5 = getFileMd5(self.file)
         self.fileSubDir = self.creatFileSubDir()
 
@@ -114,8 +78,8 @@ class FileInfo(object):
     def getFileName(self):
         return self.fileName
 
-    def getFileExt(self):
-        return self.fileExt
+    def getFileExtension(self):
+        return self.fileExtension
 
     def getFileMd5(self):
         return self.fileMd5
@@ -125,7 +89,7 @@ class FileInfo(object):
 
     def creatFileSubDir(self):
         timeTmp = None
-        if self.fileExt in (".jpg", ".jpeg"):
+        if self.fileExtension in (".jpg", ".jpeg"):
             try:
                 timeTmp = time.strptime(getDateTimeOriginal(self.file), '%Y:%m:%d %H:%M:%S')
             except KeyError:
@@ -136,7 +100,11 @@ class FileInfo(object):
 
     def getFileInfo(self):
         keys = ("file", "fileName", "fileExt", "fileMd5", "subDir")
-        return dict(zip(keys, (self.file, self.fileName, self.fileExt, self.fileMd5, self.getSubDir())))
+        return dict(zip(keys, (self.file, self.fileName, self.fileExtension, self.fileMd5, self.getSubDir())))
+
+    def rmFile(self):
+        os.remove(self.file)
+        print("{}删除成功".format(self.file))
 
 
 class BackupPath(object):
@@ -153,7 +121,7 @@ class BackupPath(object):
         try:
             with open(self.pickleFile, 'rb') as f:
                 latestMd5 = pickle.load(f)
-        except FileNotFoundError:
+        except FileNotFoundError:  # "filesmd5db.pickle"文件不存在，则新建
             with open(self.pickleFile, 'wb') as f:
                 pickle.dump(latestMd5, f)
         return latestMd5
@@ -163,7 +131,7 @@ class BackupPath(object):
             pickle.dump(self.fileMd5Dict, f)
 
     def renewFileMd5Dict(self):
-        '''更新MD5字典'''
+        '''刷新MD5字典，保持最新的文件MD5'''
         pass
 
     def copyFile(self, fileInfo):
@@ -190,15 +158,17 @@ class BackupPath(object):
             md5s = self.fileMd5Dict[fInfo.getSubDir()]
             if fInfo.getFileMd5() in md5s:  # 判断文件是否存在
                 print("文件已存在1")
-                return False  # 文件已经存在，返回False
+                result = False  # 文件已经存在，返回False
             else:
-                return self.copyFile(fInfo)
+                result = self.copyFile(fInfo)
         else:
             subDir = os.path.join(self.backupPath, fInfo.getSubDir())  # 第一次碰到子目录处理步骤
             if not os.path.isdir(subDir):
                 os.mkdir(subDir)
             self.fileMd5Dict[fInfo.getSubDir()] = set()
-            return self.copyFile(fInfo)
+            result = self.copyFile(fInfo)
+        fInfo.rmFile()
+        return result
 
 
 def filetest():
@@ -206,7 +176,7 @@ def filetest():
     fInfo = FileInfo(file)
     print(fInfo.getFile())
     print(fInfo.getFileName())
-    print(fInfo.getFileExt())
+    print(fInfo.getFileExtension())
     print(fInfo.getFileMd5())
     print(fInfo.getSubDir())
 
@@ -223,10 +193,18 @@ def bkptest():
 if __name__ == "__main__":
     # filetest()
     # bkptest()
-    path = "d:\\20170706apple6"
-    # for p in getSubPaths(path):
-    # print(p)
-    wildcard = "*.jpg"  # (createWildcard(("jpg", "mov", "mp4")))
-    # print(creatGlobParameter(wildcard, path))
-    for file in getFileOfNeedType(wildcard, path):
-        print(file)
+    srcpath = "g:\\temp"
+    bkpath = BackupPath("g:\\backup")
+    # bkpath.renewFileMd5Dict()
+    # for key in bkpath.getFileMd5Dict():
+    #     print(key)
+    nf = NeedFiles()
+    #nf.setFileExtension("mov", "jpeg")
+    #nf.setFileExtension("MP4", "DAT")
+    nf.setFileExtension("3gp", "avi", "mpg", "mov", "jpeg", "MP4", "DAT", "jpg", "png")
+    i = 0
+    for file in nf.getNeedFiles(srcpath):
+        if bkpath.backupFile(file):
+            i += 1
+    print(i)
+    bkpath.saveFileMd5Dict()
